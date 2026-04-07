@@ -31,9 +31,11 @@ st.set_page_config(
 # ─── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
+  /* Global */
   .block-container { padding-top: 1.5rem; }
   h1 { color: #1F497D; }
 
+  /* Ticket cards */
   .card {
     border: 1px solid rgba(128,128,128,0.25);
     border-radius: 10px;
@@ -45,6 +47,7 @@ st.markdown("""
   .card.relevant { border-left: 5px solid #2e7d32; }
   .card.skipped  { border-left: 5px solid #c62828; opacity: 0.85; }
 
+  /* Badges */
   .badge {
     display: inline-block;
     padding: 2px 10px;
@@ -59,6 +62,7 @@ st.markdown("""
   .badge-grey   { background: rgba(128,128,128,0.15); color: var(--text-color); }
   .badge-orange { background: rgba(230,81,0,0.15);    color: #ffa726; }
 
+  /* Sections inside card */
   .release-note {
     background: rgba(46,125,50,0.1);
     border-left: 3px solid #558b2f;
@@ -92,12 +96,14 @@ st.markdown("""
   .summary-text { color: var(--text-color); opacity: 0.75; font-size: 13px; margin-top: 4px; }
   .label-sm     { font-size: 10px; font-weight: 600; color: var(--text-color); opacity: 0.55; text-transform: uppercase; letter-spacing: 0.5px; }
 
+  /* Section divider */
   .section-header {
     font-size: 18px; font-weight: 700; color: #4a90d9;
     border-bottom: 2px solid rgba(74,144,217,0.3);
     padding-bottom: 6px; margin: 20px 0 14px 0;
   }
 
+  /* Export bar */
   .export-bar {
     background: rgba(33,150,243,0.08);
     border: 1px solid rgba(33,150,243,0.25);
@@ -107,6 +113,7 @@ st.markdown("""
     color: var(--text-color);
   }
 
+  /* Stats strip */
   .stat-box {
     background: var(--secondary-background-color);
     border-radius: 8px;
@@ -255,7 +262,6 @@ CLEAN_PATTERNS = [
 ]
 
 ANOMALY_TYPES = {'bug', 'bogue'}
-RELEVANT_JIRA_TYPES = {'Amélioration', 'Bug', 'Anomalie', 'Bogue', 'Tâche', 'Sous-Tâche'}
 FIELDS_TO_CLEAN = ['description', 'comments', 'summary']
 
 
@@ -313,133 +319,6 @@ def clean_ticket(ticket: dict) -> dict:
     for field in FIELDS_TO_CLEAN:
         cleaned[field] = clean_text(cleaned.get(field, ''))
     return cleaned
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# JIRA API FETCH
-# ═══════════════════════════════════════════════════════════════════════════════
-def fetch_tickets_from_jira_api(
-    server: str,
-    username: str,
-    password: str,
-    ticket_codes: list[str],
-    status_placeholder=None,
-) -> tuple[list[dict], list[str]]:
-    """
-    Fetch tickets from a JIRA server via the REST API.
-    Returns (tickets, warnings) where warnings is a list of skipped ticket keys.
-    Raises RuntimeError on connection/auth failures.
-    """
-    import requests
-    import urllib3
-
-    def _log(msg: str):
-        if status_placeholder:
-            status_placeholder.info(msg)
-
-    server = server.rstrip('/')
-
-    # ── 1. Connectivity check ────────────────────────────────────────────────
-    _log(f"🔌 Vérification de la connexion à {server} …")
-    verify_ssl = True
-    try:
-        r = requests.get(
-            f'{server}/rest/api/2/serverInfo',
-            auth=(username, password),
-            timeout=15,
-            verify=True,
-        )
-        r.raise_for_status()
-        info = r.json()
-        _log(f"✅ Connecté — JIRA {info.get('version', '?')} · {info.get('serverTitle', '')}")
-        verify_ssl = True
-
-    except requests.exceptions.SSLError:
-        _log("⚠️ Certificat SSL auto-signé détecté — nouvelle tentative sans vérification SSL…")
-        urllib3.disable_warnings()
-        try:
-            r = requests.get(
-                f'{server}/rest/api/2/serverInfo',
-                auth=(username, password),
-                timeout=15,
-                verify=False,
-            )
-            r.raise_for_status()
-            _log(f"✅ Connecté (SSL non vérifié) — JIRA {r.json().get('version', '?')}")
-            verify_ssl = False
-        except Exception as e2:
-            raise RuntimeError(f"Connexion échouée même sans vérification SSL : {e2}")
-
-    except requests.exceptions.ConnectionError as e:
-        raise RuntimeError(
-            f"Impossible de joindre {server}.\n"
-            f"Causes possibles : URL incorrecte, VPN requis, pare-feu, ou réseau non autorisé.\n"
-            f"Détail : {e}"
-        )
-    except requests.exceptions.Timeout:
-        raise RuntimeError(
-            f"Le serveur ne répond pas (timeout). "
-            f"Cette machine n'est peut-être pas sur le même réseau/VPN que {server}. "
-            f"Utilisez l'export XML à la place."
-        )
-    except requests.exceptions.HTTPError as e:
-        sc = r.status_code
-        if sc == 401:
-            raise RuntimeError("Authentification échouée (401). Vérifiez identifiant et mot de passe.")
-        elif sc == 403:
-            raise RuntimeError("Accès refusé (403). Votre compte n'a peut-être pas accès à l'API REST.")
-        else:
-            raise RuntimeError(f"Erreur HTTP {sc} : {e}")
-
-    # ── 2. Connect via jira library ──────────────────────────────────────────
-    try:
-        from jira import JIRA
-    except ImportError:
-        raise RuntimeError(
-            "Le module 'jira' n'est pas installé. Exécutez : pip install jira"
-        )
-
-    options = {'server': server, 'verify': verify_ssl}
-    jira_client = JIRA(options=options, basic_auth=(username, password), timeout=30)
-
-    # ── 3. JQL fetch ─────────────────────────────────────────────────────────
-    codes_jql = ', '.join(ticket_codes)
-    jql = f'issueKey in ({codes_jql})'
-    _log(f"🔍 Récupération JQL : {jql}")
-
-    issues = jira_client.search_issues(
-        jql,
-        maxResults=len(ticket_codes) + 10,
-        fields='summary,description,issuetype,components,status,resolution,fixVersions,comment',
-    )
-    _log(f"→ {len(issues)} issue(s) retournée(s)")
-
-    # ── 4. Build ticket dicts ─────────────────────────────────────────────────
-    tickets = []
-    warnings = []
-    for issue in issues:
-        issue_type = issue.fields.issuetype.name
-        if issue_type not in RELEVANT_JIRA_TYPES:
-            warnings.append(f"{issue.key} ignoré (type : {issue_type})")
-            continue
-
-        comments = ' | '.join(
-            c.body for c in (issue.fields.comment.comments or [])
-            if c.body
-        )
-
-        tickets.append({
-            'key':         issue.key,
-            'type':        issue_type,
-            'summary':     issue.fields.summary or '',
-            'description': issue.fields.description or '',
-            'component':   ', '.join(c.name for c in (issue.fields.components or [])) or 'Autres évolutions',
-            'resolution':  getattr(issue.fields.resolution, 'name', 'Non résolue'),
-            'fixVersion':  ', '.join(v.name for v in (issue.fields.fixVersions or [])),
-            'comments':    comments,
-        })
-
-    return tickets, warnings
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -537,6 +416,7 @@ def generate_docx_bytes(selected_results: list, version_label: str, deploy_date:
         section.left_margin   = Cm(2.5)
         section.right_margin  = Cm(2.5)
 
+    # Title table
     tt = doc.add_table(rows=2, cols=2)
     tt.style = 'Table Grid'
     c_date  = tt.cell(0, 0);  c_date.text  = f'Date : {deploy_date}'
@@ -557,6 +437,7 @@ def generate_docx_bytes(selected_results: list, version_label: str, deploy_date:
     set_cell_bg(desc_cell, 'D0E4F7')
     doc.add_paragraph('')
 
+    # Group by component / anomaly
     component_changes: dict = defaultdict(list)
     anomaly_changes: list   = []
     for r in selected_results:
@@ -581,6 +462,7 @@ def generate_docx_bytes(selected_results: list, version_label: str, deploy_date:
             b.add_run(f'[{comp}] {change}' if comp else change)
             b.paragraph_format.space_after = Pt(2)
 
+    # Footer
     doc.add_paragraph('')
     fp = doc.add_paragraph(
         f'Document généré automatiquement le {datetime.now().strftime("%d/%m/%Y à %H:%M")}'
@@ -600,19 +482,19 @@ def generate_docx_bytes(selected_results: list, version_label: str, deploy_date:
 # CARD RENDERER
 # ═══════════════════════════════════════════════════════════════════════════════
 def render_card(result: dict):
-    key         = result.get('key', '?')
-    relevant    = result.get('relevant', False)
-    component   = result.get('component', '—')
+    key       = result.get('key', '?')
+    relevant  = result.get('relevant', False)
+    component = result.get('component', '—')
     ticket_type = result.get('type', '—')
-    change      = result.get('change_description') or ''
-    reasoning   = result.get('reasoning') or ''
-    skip_rsn    = result.get('reason_if_not_relevant') or ''
-    is_anom     = ticket_type.lower() in ANOMALY_TYPES
+    change    = result.get('change_description') or ''
+    reasoning = result.get('reasoning') or ''
+    skip_rsn  = result.get('reason_if_not_relevant') or ''
+    is_anom   = ticket_type.lower() in ANOMALY_TYPES
 
-    card_class = 'card relevant' if relevant else 'card skipped'
-    badge_rel  = '<span class="badge badge-green">✅ PERTINENT</span>' if relevant else '<span class="badge badge-red">⏭ IGNORÉ</span>'
-    badge_comp = f'<span class="badge badge-blue">{component}</span>'
-    badge_type = f'<span class="badge badge-orange">{ticket_type}</span>' if is_anom else f'<span class="badge badge-grey">{ticket_type}</span>'
+    card_class  = 'card relevant' if relevant else 'card skipped'
+    badge_rel   = '<span class="badge badge-green">✅ PERTINENT</span>' if relevant else '<span class="badge badge-red">⏭ IGNORÉ</span>'
+    badge_comp  = f'<span class="badge badge-blue">{component}</span>'
+    badge_type  = f'<span class="badge badge-orange">{ticket_type}</span>' if is_anom else f'<span class="badge badge-grey">{ticket_type}</span>'
 
     content_html = ''
     if relevant and change:
@@ -633,9 +515,9 @@ def render_card(result: dict):
 # ═══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INIT
 # ═══════════════════════════════════════════════════════════════════════════════
-for _k in ('all_results', 'processed', 'cleaned_tickets'):
-    if _k not in st.session_state:
-        st.session_state[_k] = [] if _k != 'processed' else False
+for key in ('all_results', 'processed', 'cleaned_tickets'):
+    if key not in st.session_state:
+        st.session_state[key] = [] if key != 'processed' else False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -645,7 +527,6 @@ with st.sidebar:
     st.markdown("## ⚙️ Configuration")
     st.divider()
 
-    # ── Mistral ───────────────────────────────────────────────────────────────
     api_key = st.text_input(
         "Clé API Mistral",
         type="password",
@@ -663,88 +544,38 @@ with st.sidebar:
         "Version du prompt",
         options=["🔹 Court (moins de tokens)", "🔷 Long (plus de contexte)"],
         index=0,
-        help="Le prompt long inclut des exemples few-shot et des règles détaillées."
+        help="Le prompt long inclut des exemples few-shot et des règles détaillées. Le prompt court est plus rapide."
     )
     selected_prompt = PROMPT_LONG if "Long" in prompt_choice else PROMPT_SMALL
 
     st.divider()
-
-    # ── Source des tickets ────────────────────────────────────────────────────
-    st.markdown("### 📥 Source des tickets")
-    ticket_source = st.radio(
-        "Mode d'import",
-        options=["📁 Export XML", "🔌 API JIRA (réseau interne)"],
-        index=0,
-        help="L'API JIRA nécessite d'être sur le réseau interne ou le VPN de votre organisation."
-    )
-    use_jira_api = "API JIRA" in ticket_source
-
-    if use_jira_api:
-        st.markdown("#### Connexion JIRA")
-        jira_server   = st.text_input("URL du serveur", placeholder="https://jira.votreorganisation.ma")
-        jira_username = st.text_input("Identifiant", placeholder="prenom.nom")
-        jira_password = st.text_input("Mot de passe / Token", type="password")
-        jira_codes_raw = st.text_area(
-            "Codes tickets (un par ligne)",
-            placeholder="SGID-61147\nSGID-61065\nSGID-61188",
-            height=120,
-            help="Entrez les identifiants JIRA, un par ligne."
-        )
-        jira_ticket_codes = [
-            c.strip() for c in jira_codes_raw.splitlines() if c.strip()
-        ]
-        jira_ready = bool(jira_server and jira_username and jira_password and jira_ticket_codes)
-    else:
-        jira_server = jira_username = jira_password = ""
-        jira_ticket_codes = []
-        jira_ready = False
-
-    st.divider()
-
-    # ── Document ──────────────────────────────────────────────────────────────
     st.markdown("### 📄 Document")
+
     version_label = st.text_input("Label de version", value="Trunk")
     deploy_date   = st.text_input("Date de déploiement", value=datetime.now().strftime("%d/%m/%Y"))
-    inter_delay   = 1.2
+    inter_delay   = 1.2  # Delay between API calls to mitigate rate limits
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 st.markdown("# 📋 Fiche-Version Generator")
-st.markdown("Importez vos tickets JIRA (XML ou API directe), analysez-les avec Mistral, sélectionnez et exportez.")
+st.markdown("Importez vos tickets JIRA en XML, analysez-les avec Mistral, sélectionnez et exportez.")
 st.divider()
 
-# ── Step 1: Import ─────────────────────────────────────────────────────────────
-if use_jira_api:
-    st.markdown('<div class="section-header">① Connexion API JIRA</div>', unsafe_allow_html=True)
+# ── Step 1: Upload ─────────────────────────────────────────────────────────────
+st.markdown('<div class="section-header">① Importer les tickets XML</div>', unsafe_allow_html=True)
 
-    if jira_ready:
-        st.success(
-            f"✅ **{len(jira_ticket_codes)}** ticket(s) configuré(s) · "
-            f"serveur : `{jira_server}`"
-        )
-        st.caption("La connexion sera établie lors de l'analyse. Assurez-vous d'être sur le réseau interne / VPN.")
-    else:
-        st.info("🔌 Renseignez les paramètres JIRA dans la barre latérale (URL, identifiant, mot de passe, codes tickets).")
+uploaded_files = st.file_uploader(
+    "Glissez-déposez un ou plusieurs fichiers XML JIRA",
+    type=["xml"],
+    accept_multiple_files=True,
+    help="Export les Tickets JIRA au format XML — un ou plusieurs fichiers"
+)
 
-    uploaded_files = []  # not used in JIRA mode
-    source_ready   = jira_ready
-
-else:
-    st.markdown('<div class="section-header">① Importer les tickets XML</div>', unsafe_allow_html=True)
-
-    uploaded_files = st.file_uploader(
-        "Glissez-déposez un ou plusieurs fichiers XML JIRA",
-        type=["xml"],
-        accept_multiple_files=True,
-        help="Export les Tickets JIRA au format XML — un ou plusieurs fichiers"
-    )
-
-    if uploaded_files:
-        st.success(f"✅ **{len(uploaded_files)}** fichier(s) prêts à être traités.")
-
-    source_ready = bool(uploaded_files)
+if uploaded_files:
+    st.success(f"✅ **{len(uploaded_files)}** fichier(s) prêts à être traités.")
 
 # ── Step 2: Process ────────────────────────────────────────────────────────────
 st.markdown('<div class="section-header">② Analyser avec Mistral</div>', unsafe_allow_html=True)
@@ -754,66 +585,32 @@ with col_btn:
     run_btn = st.button(
         "▶ Analyser les tickets",
         type="primary",
-        disabled=not (source_ready and api_key),
+        disabled=not (uploaded_files and api_key),
         use_container_width=True,
     )
 with col_info:
     if not api_key:
         st.warning("⚠️ Renseignez votre clé API Mistral dans la barre latérale.")
-    elif not source_ready:
-        if use_jira_api:
-            st.info("🔌 Complétez la configuration JIRA dans la barre latérale.")
-        else:
-            st.info("📂 Importez au moins un fichier XML.")
+    elif not uploaded_files:
+        st.info("📂 Importez au moins un fichier XML.")
     else:
-        if use_jira_api:
-            n = len(jira_ticket_codes)
-        else:
-            n = len(uploaded_files)
+        n = len(uploaded_files)
         est = int(n * inter_delay) + n * 2
-        st.info(f"Prêt · {n} ticket(s) · durée estimée ~{est}s à {inter_delay}s/appel")
+        st.info(f"Prêt · {n} fichier(s) · durée estimée ~{est}s à {inter_delay}s/appel")
 
-if run_btn and source_ready and api_key:
-
+if run_btn and uploaded_files and api_key:
+    # Parse + clean
     raw_tickets = []
-
-    if use_jira_api:
-        # ── JIRA API path ──────────────────────────────────────────────────
-        jira_status = st.empty()
+    for f in uploaded_files:
         try:
-            fetched, fetch_warnings = fetch_tickets_from_jira_api(
-                server=jira_server,
-                username=jira_username,
-                password=jira_password,
-                ticket_codes=jira_ticket_codes,
-                status_placeholder=jira_status,
-            )
-            raw_tickets = fetched
-            jira_status.empty()
-            if fetch_warnings:
-                for w in fetch_warnings:
-                    st.warning(f"⏭ {w}")
-            st.success(f"✅ **{len(raw_tickets)}** ticket(s) récupéré(s) depuis JIRA.")
-        except RuntimeError as e:
-            jira_status.empty()
-            st.error(f"❌ Erreur API JIRA : {e}")
-            st.info(
-                "💡 **Alternative** : exportez les tickets en XML depuis JIRA "
-                "(Détails du ticket → ⋮ → Exporter en XML) et utilisez le mode Import XML."
-            )
-            st.stop()
-    else:
-        # ── XML path ──────────────────────────────────────────────────────
-        for f in uploaded_files:
-            try:
-                parsed = parse_xml_bytes(f.read())
-                raw_tickets.extend(parsed)
-            except Exception as e:
-                st.error(f"❌ Erreur parsing `{f.name}`: {e}")
+            parsed = parse_xml_bytes(f.read())
+            raw_tickets.extend(parsed)
+        except Exception as e:
+            st.error(f"❌ Erreur parsing `{f.name}`: {e}")
 
     cleaned = [clean_ticket(t) for t in raw_tickets]
 
-    # ── Deduplicate ────────────────────────────────────────────────────────
+    # ── Deduplicate by ticket key (keep first occurrence) ──────────────────
     seen_keys: set = set()
     deduped, duplicates = [], []
     for t in cleaned:
@@ -834,7 +631,7 @@ if run_btn and source_ready and api_key:
     st.session_state.cleaned_tickets = cleaned
 
     if not cleaned:
-        st.error("Aucun ticket valide trouvé.")
+        st.error("Aucun ticket valide trouvé dans les fichiers.")
     else:
         client = Mistral(api_key=api_key)
         all_results = []
@@ -849,6 +646,7 @@ if run_btn and source_ready and api_key:
             result = analyze_ticket(client, model_choice, selected_prompt, ticket, inter_delay)
             all_results.append(result)
 
+            # Initialize checkbox state as True for relevant, False for skipped
             cb_key = f"sel_{result['key']}"
             if cb_key not in st.session_state:
                 st.session_state[cb_key] = result.get('relevant', False)
@@ -862,11 +660,8 @@ if run_btn and source_ready and api_key:
         st.session_state.processed   = True
         progress_bar.empty()
         status_area.empty()
-        st.success(
-            f"✅ Analyse terminée — "
-            f"{sum(1 for r in all_results if r.get('relevant'))} pertinents · "
-            f"{sum(1 for r in all_results if not r.get('relevant'))} ignorés"
-        )
+        st.success(f"✅ Analyse terminée — {sum(1 for r in all_results if r.get('relevant'))} pertinents · "
+                   f"{sum(1 for r in all_results if not r.get('relevant'))} ignorés")
         st.rerun()
 
 
@@ -876,6 +671,7 @@ if st.session_state.get('processed') and st.session_state.get('all_results'):
     relevant = [r for r in all_results if r.get('relevant')]
     skipped  = [r for r in all_results if not r.get('relevant')]
 
+    # Stats strip
     st.markdown('<div class="section-header">③ Résultats et sélection</div>', unsafe_allow_html=True)
     s1, s2, s3, s4 = st.columns(4)
     with s1:
@@ -890,6 +686,7 @@ if st.session_state.get('processed') and st.session_state.get('all_results'):
 
     st.markdown("")
 
+    # Select all / deselect controls
     ca_col, _, filter_col = st.columns([2, 5, 3])
     with ca_col:
         select_all = st.checkbox("Tout sélectionner", value=False)
@@ -903,11 +700,15 @@ if st.session_state.get('processed') and st.session_state.get('all_results'):
 
     st.markdown("")
 
+    # Render tickets grouped by component
     display_results = all_results if show_skipped else relevant
+
+    # Group by component for display
     by_component: dict = defaultdict(list)
     for r in display_results:
         by_component[r['component']].append(r)
 
+    # Relevant components first, then "skipped only" components
     for comp in sorted(by_component.keys()):
         comp_results = by_component[comp]
         with st.expander(f"**{comp}** — {len(comp_results)} ticket(s)", expanded=True):
@@ -915,7 +716,11 @@ if st.session_state.get('processed') and st.session_state.get('all_results'):
                 key = result.get('key', '?')
                 cb_col, card_col = st.columns([1, 20])
                 with cb_col:
-                    st.checkbox("", key=f"sel_{key}")
+                    st.checkbox(
+                        "",
+                        key=f"sel_{key}",
+                        #help="Cocher pour inclure dans l'export",
+                    )
                 with card_col:
                     render_card(result)
 
