@@ -180,10 +180,10 @@ Exemple 3 — PERTINENT (redressement d'un bug) :
 === FORMAT DE RÉPONSE ===
 Réponds UNIQUEMENT avec un objet JSON valide, sans explication ni markdown :
 {
-  \"relevant\": true ou false,
-  \"change_description\": \"<phrase(s) de note de version en français formel>\",
-  \"reason_if_not_relevant\": \"<raison brève si non pertinent, sinon null>\",
-  \"reasoning\": \"<2-3 phrases : quel champ a orienté la décision, quel changement fonctionnel a été identifié, comment il a été formulé>\"
+  "relevant": true ou false,
+  "change_description": "<phrase(s) de note de version en français formel>",
+  "reason_if_not_relevant": "<raison brève si non pertinent, sinon null>",
+  "reasoning": "<2-3 phrases : quel champ a orienté la décision, quel changement fonctionnel a été identifié, comment il a été formulé>"
 }
 """
 
